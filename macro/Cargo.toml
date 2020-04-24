@@ -1,0 +1,12 @@
+[package]
+name = "nor-storage-macros"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "1.0", features = ["full", "extra-traits", "derive"] }
+proc-macro2 = "1.0"
+quote = "1.0"

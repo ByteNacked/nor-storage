@@ -1,0 +1,12 @@
+[package]
+name = "ex1"
+version = "0.1.0"
+edition = "2018"
+
+[[bin]]
+name = "ex1"
+path = "main.rs"
+
+[dependencies]
+nor-storage = { path = "../../", features = ["test-def"] }
+crc = { version = "2.0", git = "https://github.com/mrhooray/crc-rs.git" }

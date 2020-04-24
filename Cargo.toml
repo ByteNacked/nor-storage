@@ -1,0 +1,16 @@
+[package]
+name = "nor-storage"
+version = "0.1.0"
+authors = ["Роман Масленников <m3angreen@gmail.com>"]
+edition = "2018"
+
+[features]
+defaults = []
+test-def = ["crc"]
+
+[dependencies]
+nor-storage-macros = { path = "macro" }
+crc = { version = "2.0", git = "https://github.com/mrhooray/crc-rs.git", optional = true }
+
+[dev-dependencies]
+crc = { version = "2.0", git = "https://github.com/mrhooray/crc-rs.git" }
