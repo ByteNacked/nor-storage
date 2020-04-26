@@ -29,8 +29,10 @@ generate_storage_ty! {
         num : u8,
         cara : u8,
         flag : bool,
-        barray : [bool;5],
+        //barray : [bool;5],
         mode : Mode,
+        my_str: &'static str,
+        my_bytes: &'static [u8],
     }
 }
 
@@ -50,18 +52,29 @@ fn main() {
     storage.set_name(6u32, &mut crc).unwrap();
     storage.set_name(3u32, &mut crc).unwrap();
     storage.set_name(1u32, &mut crc).unwrap();
+    storage.set_my_str("Hello", &mut crc).unwrap();
     storage.set_calib(777u32, &mut crc).unwrap();
     storage.set_cara(42u8, &mut crc).unwrap();
     storage.set_cara(42u8, &mut crc).unwrap();
     storage.set_cara(42u8, &mut crc).unwrap();
     storage.set_flag(true, &mut crc).unwrap();
     storage.set_flag(false, &mut crc).unwrap();
-    storage.set_barray([false, true, false, true, true], &mut crc).unwrap();
-    storage.set_barray([false; 5], &mut crc).unwrap();
+    storage.set_my_str("Crabby crab", &mut crc).unwrap();
+    //storage.set_barray([false, true, false, true, true], &mut crc).unwrap();
+    //storage.set_barray([false; 5], &mut crc).unwrap();
     storage.set_mode(Mode::Lifting, &mut crc).unwrap();
     storage.set_mode(Mode::InAir, &mut crc).unwrap();
+    
+    storage.set_my_bytes(&[0u8,1,2], &mut crc).unwrap();
+    storage.set_my_bytes(&[2u8,1,0], &mut crc).unwrap();
 
     let stats = storage.init(&mut crc);
     println!("Stats: {:#?}", stats);
-    println!("{:?}", &storage);
+    let mut fmt_str = String::new();
+    let _ = storage.format(&mut fmt_str, &mut crc);
+    println!("{}", &fmt_str);
 }
+
+
+
+

@@ -1,12 +1,28 @@
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
-use proc_macro2::Span;
-use syn::{parse_macro_input,  Fields, ItemStruct, Ident, FieldsNamed, ExprLit, Lit, LitInt};
+use proc_macro2::{Span, TokenStream};
+use syn::{
+    parse_macro_input,
+    Fields,
+    ItemStruct,
+    Ident,
+    FieldsNamed,
+    Field,
+    ExprLit,
+    Lit,
+    LitInt,
+    Type,
+    TypeReference,
+    Lifetime,
+    TypePath,
+    Path,
+    PathSegment,
+    TypeSlice,
+};
 use quote::quote;
 
 #[proc_macro]
-pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
+pub fn generate_storage_ty(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let i = parse_macro_input!(input as ItemStruct);
 
     //eprint!("{:#?}", &i);
@@ -19,19 +35,28 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
     let fields = if let ItemStruct { fields : Fields::Named( FieldsNamed{ named, .. } ), .. } = &i {
         named
     } else {
-        unimplemented!()
+        unimplemented!("Only structs supported")
     };
     //eprint!("fields : {:#?}", &fields);
+    let setters_getters = setters_getters(
+        &fields.iter().enumerate().map(|(uid, f)|{
+            (
+                f.clone(),
+                LitInt::new(&(uid + 1).to_string(),Span::call_site()),
+            )
+        })
+        .collect::<Vec<_>>()
+    );
 
     let field_name : Vec<&_> = fields.into_iter().filter_map(|f| {
         f.ident.as_ref()
     }).collect();
 
-    let field_ty : Vec<&_> = fields.into_iter().map(|f| {
+    let _field_ty : Vec<&_> = fields.into_iter().map(|f| {
         &f.ty
     }).collect();
 
-    let setter_names : Vec<_> = (&field_name).into_iter().map(|name| {
+    let _setter_names : Vec<_> = (&field_name).into_iter().map(|name| {
         Ident::new(&format!("set_{}", name.to_string()), name.span())
     }).collect();
 
@@ -46,7 +71,7 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
     let uids : Vec<_> = (0 .. field_name.len()).into_iter().map(|num| {
         ExprLit {
             attrs : vec![],
-            lit : Lit::Int(LitInt::new(&num.to_string() , Span::call_site())),
+            lit : Lit::Int(LitInt::new(&(num + 1).to_string() , Span::call_site())),
         }
     }).collect();
 
@@ -58,27 +83,28 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
 
 
     let out = quote!(
-        //use $crate::Record;
 
-
-        const MAX_RECORD_SZ : usize = 0x80;
-        const MAX_RECORDS_NUMBER : usize = #max_recods_num;
-
-        //union #un_ty_name {
-        //    #( #field_name : #field_ty, )*
-        //    buf : [u8;VALUE_MAX_SZ],
-        //}
+        //const MAX_RECORD_SZ : usize = 0x80;
+        //const MAX_RECORDS_NUMBER : usize = #max_recods_num + 1;
 
         pub struct #ty_name<M> {
             storage      : Storage<M>,
-            record_table : [RecordDesc; MAX_RECORDS_NUMBER],
+            record_table : [RecordDesc; #max_recods_num + 1],
         }
 
-        impl<M : StorageMem> #ty_name<M> {
+        impl<M> #ty_name<M> 
+        where 
+            M: StorageMem,
+            M::Error: ::core::fmt::Debug,
+        {
             pub fn new(mem : M) -> Self {
                 Self {
                     storage : Storage::new(mem),
                     record_table : [
+                        RecordDesc {
+                            tag : 0,
+                            ptr : None,
+                        },
                         #(RecordDesc {
                             tag : #uids,
                             ptr : None,
@@ -91,52 +117,13 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
                 self.storage.init(&mut self.record_table, hasher)
             }
 
-            #( 
-                pub fn #getter_names(&self) ->  Result<Option<&'static #field_ty>, Error> {
-                    let record_desc = &self.record_table[#uids];
-                    let some = self.storage.get(record_desc)?;
-                    
-                    match some {
-                        Some(payload) => {
-                            unsafe {
-                                let field_ptr = payload.as_ptr() as usize as *const #field_ty;
-                                Ok(Some(&*field_ptr))
-                                //Ok(Some(&0))
-                            }
-                        }
-                        None => Ok(None),
-                    }
-                }
-            )*
+            #setters_getters
 
-            #( 
-                pub fn #setter_names(&mut self, #field_name : #field_ty, hasher : &mut impl StorageHasher32) -> Result<(),Error> {
-                    let mut record_desc = &mut self.record_table[#uids];
-                    
-                    let field_ptr : *const Word = (&#field_name) as *const _ as usize as *const Word;
-                    const FILED_SIZE : usize = ::core::mem::size_of::<#field_ty>();
-                    let payload_slice_sz : usize = match FILED_SIZE {
-                        0 => 0,
-                        n => {
-                            if n >= WORD_SIZE {
-                                n / WORD_SIZE
-                            } else {
-                                WORD_SIZE
-                            }
-                        }
-                    };
-                    let src_words : &[Word] = unsafe { ::core::slice::from_raw_parts(field_ptr, payload_slice_sz) };
-                    self.storage.update(record_desc, src_words, hasher)
-                }
-            )*
-        }
-
-        impl<M : StorageMem> ::core::fmt::Debug for #ty_name<M> {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+            fn format(&self, f: &mut ::core::fmt::Write, hasher: &mut impl StorageHasher32) -> ::core::fmt::Result {
                     write!(f, "{} {{\n", stringify!(#ty_name))?;
                     #( 
                         let name_str = stringify!( #field_name );
-                        let value = self.#getter_names();
+                        let value = self.#getter_names(hasher);
                         write!(f, "    {} : {:?}\n", name_str, value)?;
                     )*
                     write!(f, "}}\n")
@@ -144,7 +131,173 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
         }
     );
 
-    TokenStream::from(out)
+    proc_macro::TokenStream::from(out)
 }
+
+fn setters_getters(fields: &Vec<(Field, LitInt)>) -> TokenStream {
+    let mut tt = TokenStream::new();
+    for (f, uid) in fields {
+        match f {
+            // Matching &'static types
+            Field{
+                ident: Some(ident_name),
+                ty: Type::Reference(TypeReference{
+                    elem, 
+                    mutability: None,
+                    lifetime: Some(Lifetime{ident: lf_ident, ..}),
+                    ..
+                }),
+                ..
+            } => {
+                let nested_ty = &**elem;
+                if *lf_ident == "static" {
+                    match nested_ty {
+                        Type::Path(TypePath{path: Path{segments, ..}, ..})  => {
+                            let PathSegment{ident, ..} = &segments
+                                .first()
+                                .expect("Unsupported strange type behind ref");
+
+                            if *ident == "str" {
+                                let sg = setter_getter_static_str(ident_name, uid);
+                                tt.extend(sg);
+                            } else {
+                               unimplemented!("Unsupported field type behind reference")
+                            }
+                        }
+                        Type::Slice(TypeSlice{elem, ..}) => {
+                            let nested_ty = &**elem;
+                            if let Type::Path(TypePath{path: Path{segments, ..}, ..}) = nested_ty {
+                                let PathSegment{ident, ..} = &segments
+                                    .first()
+                                    .expect("Unsupported strange type behind ref");
+
+                                if *ident == "u8" {
+                                    let sg = setter_getter_static_byte_slice(ident_name, uid);
+                                    tt.extend(sg);
+                                } else {
+                                   unimplemented!("Unsupported field type behind reference")
+                                }
+                            } else {
+                               unimplemented!("Unsupported field type slice behind reference")
+                            }
+                        }
+                        _ => unimplemented!("Unsupported field type behind reference")
+                    }
+                } else {
+                    unimplemented!("Only supproted 'static ref types")
+                }
+            }
+            // Matching primitive and composite types
+            Field{ident: Some(ident_name), ty: Type::Path(TypePath{path: Path{segments, ..}, ..}), ..} =>  {
+                let PathSegment{ident: ty, ..} = &segments
+                    .first()
+                    .expect("Unsupported strange type behind ref");
+                
+                let sg = setter_getter_primitive_composite(ident_name, ty, uid);
+                tt.extend(sg);
+            }
+
+            _ => unimplemented!("Unsupported field type"),
+        }
+    }
+
+    tt
+}
+
+fn setter_getter_primitive_composite(name: &Ident, ty: &Ident, uid: &LitInt) -> TokenStream {
+    let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
+    let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
+    quote!(
+        pub fn #setter_name(&mut self, #name: #ty, hasher: &mut impl StorageHasher32)
+            -> Result<(),Error<M::Error>>
+        {
+
+            assert!(::core::mem::align_of::<#ty>() <= ::core::mem::align_of::<Word>(), "Aligment of type to big");
+
+            let mut record_desc = &mut self.record_table[#uid];
+
+            let src = unsafe { 
+                ::core::slice::from_raw_parts(
+                     (&#name) as *const _ as usize as *const u8,
+                     ::core::mem::size_of::<#ty>(),
+                ) 
+            };
+            self.storage.update(record_desc, src, hasher)
+        }
+
+        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static #ty>, Error<M::Error>> {
+            let record_desc = &self.record_table[#uid];
+            let some = self.storage.get(record_desc, hasher)?;
+            
+            match some {
+                Some(payload) => {
+                    unsafe {
+                        let field_ptr = payload.as_ptr() as usize as *const #ty;
+                        Ok(Some(&*field_ptr))
+                    }
+                }
+                None => Ok(None),
+            }
+        }
+    )
+}
+
+fn setter_getter_static_byte_slice(name: &Ident, uid: &LitInt) -> TokenStream {
+    let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
+    let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
+    quote!(
+        pub fn #setter_name(&mut self, #name: &[u8], hasher: &mut impl StorageHasher32)
+            -> Result<(),Error<M::Error>>
+        {
+            let mut record_desc = &mut self.record_table[#uid];
+            self.storage.update(record_desc, #name, hasher)
+        }
+
+        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static [u8]>, Error<M::Error>> {
+            let record_desc = &self.record_table[#uid];
+            let some = self.storage.get(record_desc, hasher)?;
+            
+            match some {
+                Some(payload) => Ok(Some(payload)),
+                None => Ok(None),
+            }
+        }
+    )
+}
+
+fn setter_getter_static_str(name: &Ident, uid: &LitInt) -> TokenStream {
+    let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
+    let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
+    quote!(
+        pub fn #setter_name(&mut self, #name: &str, hasher: &mut impl StorageHasher32)
+            -> Result<(),Error<M::Error>>
+        {
+            let mut record_desc = &mut self.record_table[#uid];
+            self.storage.update(record_desc, #name.as_bytes(), hasher)
+        }
+
+        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static str>, Error<M::Error>> {
+            let record_desc = &self.record_table[#uid];
+            let some = self.storage.get(record_desc, hasher)?;
+            
+            match some {
+                Some(payload) => {
+                    let str = unsafe { ::core::str::from_utf8_unchecked(payload) };
+                    Ok(Some(str))
+                }
+                None => Ok(None),
+            }
+        }
+    )
+}
+
+
+
+
+
+
+
+
+
 
 

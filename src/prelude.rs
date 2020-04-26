@@ -4,7 +4,7 @@ pub use crate::{
     RecordDesc,
     Word,
     Error,
-    WORD_SIZE,
+    WORD_SZ,
     StorageHasher32,
     InitStats,
 };
