@@ -36,7 +36,7 @@ generate_storage_ty! {
     }
 }
 
-fn crc32_ethernet() -> impl StorageHasher32 {
+fn crc32_ethernet() -> Digest {
     Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)
 }
 
@@ -44,7 +44,7 @@ fn main() {
     
     let mem = nor_storage::TestMem([!0;0x100]);
 
-    let mut storage = PerMap::new(mem);
+    let mut storage = PerMap::<_, Digest>::new(mem);
     let mut crc = crc32_ethernet();
     let _ = storage.init(&mut crc);
     
@@ -70,9 +70,7 @@ fn main() {
 
     let stats = storage.init(&mut crc);
     println!("Stats: {:#?}", stats);
-    let mut fmt_str = String::new();
-    let _ = storage.format(&mut fmt_str, &mut crc);
-    println!("{}", &fmt_str);
+    println!("{:?}", &storage);
 }
 
 

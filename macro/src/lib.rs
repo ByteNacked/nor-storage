@@ -87,43 +87,51 @@ pub fn generate_storage_ty(input: proc_macro::TokenStream) -> proc_macro::TokenS
         //const MAX_RECORD_SZ : usize = 0x80;
         //const MAX_RECORDS_NUMBER : usize = #max_recods_num + 1;
 
-        pub struct #ty_name<M> {
-            storage      : Storage<M>,
-            record_table : [RecordDesc; #max_recods_num + 1],
+        pub struct #ty_name<M, H> {
+            storage: Storage<M, H>,
+            record_table: [RecordDesc; #max_recods_num + 1],
         }
 
-        impl<M> #ty_name<M> 
+        impl<M, H> #ty_name<M, H> 
         where 
             M: StorageMem,
             M::Error: ::core::fmt::Debug,
+            H: StorageHasher32,
         {
-            pub fn new(mem : M) -> Self {
+            pub fn new(mem: M) -> Self {
                 Self {
-                    storage : Storage::new(mem),
-                    record_table : [
+                    storage: Storage::<M, H>::new(mem),
+                    record_table: [
                         RecordDesc {
-                            tag : 0,
-                            ptr : None,
+                            tag: 0,
+                            ptr: None,
                         },
                         #(RecordDesc {
-                            tag : #uids,
-                            ptr : None,
+                            tag: #uids,
+                            ptr: None,
                         }),*
                     ],
                 }
             }
 
-            pub fn init(&mut self, hasher : &mut impl StorageHasher32) -> InitStats {
+            pub fn init(&mut self, hasher: &mut H) -> InitStats {
                 self.storage.init(&mut self.record_table, hasher)
             }
 
             #setters_getters
+        }
 
-            fn format(&self, f: &mut ::core::fmt::Write, hasher: &mut impl StorageHasher32) -> ::core::fmt::Result {
+        impl<M, H> ::core::fmt::Debug for #ty_name<M, H>
+        where 
+            M: StorageMem,
+            M::Error: ::core::fmt::Debug,
+            H: StorageHasher32,
+        {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                     write!(f, "{} {{\n", stringify!(#ty_name))?;
                     #( 
                         let name_str = stringify!( #field_name );
-                        let value = self.#getter_names(hasher);
+                        let value = self.#getter_names(None).unwrap();
                         write!(f, "    {} : {:?}\n", name_str, value)?;
                     )*
                     write!(f, "}}\n")
@@ -208,7 +216,7 @@ fn setter_getter_primitive_composite(name: &Ident, ty: &Ident, uid: &LitInt) -> 
     let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
     let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
     quote!(
-        pub fn #setter_name(&mut self, #name: #ty, hasher: &mut impl StorageHasher32)
+        pub fn #setter_name(&mut self, #name: #ty, hasher: &mut H)
             -> Result<(),Error<M::Error>>
         {
 
@@ -225,7 +233,7 @@ fn setter_getter_primitive_composite(name: &Ident, ty: &Ident, uid: &LitInt) -> 
             self.storage.update(record_desc, src, hasher)
         }
 
-        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static #ty>, Error<M::Error>> {
+        pub fn #getter_name(&self, hasher: Option<&mut H>) ->  Result<Option<&'static #ty>, Error<M::Error>> {
             let record_desc = &self.record_table[#uid];
             let some = self.storage.get(record_desc, hasher)?;
             
@@ -246,14 +254,14 @@ fn setter_getter_static_byte_slice(name: &Ident, uid: &LitInt) -> TokenStream {
     let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
     let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
     quote!(
-        pub fn #setter_name(&mut self, #name: &[u8], hasher: &mut impl StorageHasher32)
+        pub fn #setter_name(&mut self, #name: &[u8], hasher: &mut H)
             -> Result<(),Error<M::Error>>
         {
             let mut record_desc = &mut self.record_table[#uid];
             self.storage.update(record_desc, #name, hasher)
         }
 
-        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static [u8]>, Error<M::Error>> {
+        pub fn #getter_name(&self, hasher: Option<&mut H>) ->  Result<Option<&'static [u8]>, Error<M::Error>> {
             let record_desc = &self.record_table[#uid];
             let some = self.storage.get(record_desc, hasher)?;
             
@@ -269,14 +277,14 @@ fn setter_getter_static_str(name: &Ident, uid: &LitInt) -> TokenStream {
     let setter_name = Ident::new(&("set_".to_string() + &name.to_string()), Span::call_site());
     let getter_name = Ident::new(&("get_".to_string() + &name.to_string()), Span::call_site());
     quote!(
-        pub fn #setter_name(&mut self, #name: &str, hasher: &mut impl StorageHasher32)
+        pub fn #setter_name(&mut self, #name: &str, hasher: &mut H)
             -> Result<(),Error<M::Error>>
         {
             let mut record_desc = &mut self.record_table[#uid];
             self.storage.update(record_desc, #name.as_bytes(), hasher)
         }
 
-        pub fn #getter_name(&self, hasher: &mut impl StorageHasher32) ->  Result<Option<&'static str>, Error<M::Error>> {
+        pub fn #getter_name(&self, hasher: Option<&mut H>) ->  Result<Option<&'static str>, Error<M::Error>> {
             let record_desc = &self.record_table[#uid];
             let some = self.storage.get(record_desc, hasher)?;
             

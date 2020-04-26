@@ -6,6 +6,7 @@ extern crate static_assertions;
 #[macro_use]
 extern crate memoffset;
 
+use core::marker::PhantomData;
 use core::mem::size_of;
 use core::slice::{from_raw_parts_mut, from_raw_parts};
 use core::convert::TryInto;
@@ -72,25 +73,29 @@ pub trait StorageHasher32 {
     fn finish(&self) -> u32;
 }
 
-pub struct Storage<S> {
+pub struct Storage<S, H> {
     storage: S,
     cur_word: usize,
+    _p: PhantomData<H>,
+
 }
 
-impl<S> Storage<S> 
+impl<S, H> Storage<S, H> 
 where 
     S: StorageMem,
+    H: StorageHasher32,
 {
 
-    pub fn new(storage : S) -> Self {
+    pub fn new(storage: S) -> Self {
         Self {
             storage,
-            cur_word : 0,
+            cur_word: 0,
+            _p: PhantomData,
         }
     }
     
     /// Scan through storage memory and populate record descriptor table
-    pub fn init(&mut self, list : &mut [RecordDesc], hasher : &mut impl StorageHasher32) -> InitStats {
+    pub fn init(&mut self, list: &mut [RecordDesc], hasher: &mut H) -> InitStats {
 
         let mut stats = InitStats { words_wasted : 0, unique_tags : 0 };
         
@@ -137,7 +142,7 @@ where
         stats
     }
 
-    fn validate_record(&self, idx : usize, hasher : &mut impl StorageHasher32) -> Option<&'static Header> {
+    fn validate_record(&self, idx: usize, hasher: &mut H) -> Option<&'static Header> {
         let _tag = self.storage.read(idx);
         let len_in_bytes = self.storage.read(idx + offset_of!(Header, sz) / WORD_SZ);
         let len_in_words = convert_sz_in_words(len_in_bytes as usize);
@@ -170,7 +175,7 @@ where
 
     // TODO: what if payload slice not Word size aligned?
     /// Update recordy entry
-    pub fn update(&mut self, record: &mut RecordDesc, payload: &[u8], hasher: &mut impl StorageHasher32)
+    pub fn update(&mut self, record: &mut RecordDesc, payload: &[u8], hasher: &mut H)
         -> Result<(),Error<S::Error>> 
     {
         let payload_len = payload.len();
@@ -234,7 +239,7 @@ where
     
     // TODO: what if result is not Word size aligned?
     /// Get record payload
-    pub fn get(&self, record : &RecordDesc, hasher: &mut impl StorageHasher32)
+    pub fn get(&self, record: &RecordDesc, hasher: Option<&mut H>)
         -> Result<Option<&'static [u8]>,Error<S::Error>> 
     {
         match record.ptr {
@@ -243,7 +248,9 @@ where
                 if header.tag != record.tag { return Err(Error::CorruptedRecordOnGet); }
 
                 //Crc check 
-                let _ = self.validate_record(idx, hasher).ok_or(Error::Crc)?;
+                if let Some(hasher) = hasher {
+                    let _ = self.validate_record(idx, hasher).ok_or(Error::Crc)?;
+                }
 
                 unsafe {
                     let header_ptr = header as *const _ as *const u8;
@@ -343,7 +350,7 @@ mod tests {
     use crc::CalcType;
     use core::fmt::{self, Display};
 
-    impl Display for Storage<TestMem> {
+    impl Display for Storage<TestMem, Digest> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             for i in (0 .. 0x40).step_by(4) {
                 writeln!(f, "{}: {:x?}", i, &self.storage.0[i..][..4])?;
@@ -352,11 +359,11 @@ mod tests {
         }
     }
     
-    fn crc32_new() -> impl StorageHasher32 {
+    fn crc32_new() -> Digest {
         Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)
     }
 
-    fn new_storage() -> Storage<TestMem> {
+    fn new_storage() -> Storage<TestMem, Digest> {
         Storage::new(TestMem([!0;0x100]))
     }
 
@@ -364,7 +371,7 @@ mod tests {
     fn empty_test() {
         let storage_mem = [!0u32;0x100];
         let capacity = storage_mem.len() * size_of::<Word>();
-        let storage = Storage::new(TestMem(storage_mem));
+        let storage = Storage::<_, Digest>::new(TestMem(storage_mem));
 
         assert_eq!(storage.len(), 0);
         assert_eq!(storage.capacity(), capacity);
@@ -385,7 +392,7 @@ mod tests {
         assert_eq!(storage.len(), (HEADER_SZ + convert_sz_in_words(rec_payload.len()) * WORD_SZ));
         assert!(&rec_desc.ptr.is_some());
         
-        let out_rec_payload = storage.get(&rec_desc, &mut crc32).unwrap().unwrap();
+        let out_rec_payload = storage.get(&rec_desc, Some(&mut crc32)).unwrap().unwrap();
         //println!("Desc list : {:#?}", &rec_desc);
         assert_eq!(&rec_payload, out_rec_payload);
 
@@ -458,9 +465,9 @@ mod tests {
             },
         ];
         storage.init(&mut ndesc_list, &mut crc32);
-        assert_eq!(storage.get(&ndesc_list[0], &mut crc32).unwrap().unwrap(), &e0);
-        assert_eq!(storage.get(&ndesc_list[1], &mut crc32).unwrap().unwrap(), &e1);
-        assert_eq!(storage.get(&ndesc_list[2], &mut crc32).unwrap().unwrap(), &e2);
+        assert_eq!(storage.get(&ndesc_list[0], Some(&mut crc32)).unwrap().unwrap(), &e0);
+        assert_eq!(storage.get(&ndesc_list[1], Some(&mut crc32)).unwrap().unwrap(), &e1);
+        assert_eq!(storage.get(&ndesc_list[2], Some(&mut crc32)).unwrap().unwrap(), &e2);
 
         assert_eq!(&desc_list, &ndesc_list)
         
