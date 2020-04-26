@@ -100,7 +100,7 @@ where
         let mut stats = InitStats { words_wasted : 0, unique_tags : 0 };
         
         let mut idx = 0;
-        let mut size = 0;
+        let mut size;
         let mut last_valid_end = 0;
         let capacity = self.storage.len();
         
@@ -120,6 +120,7 @@ where
                 }
             }
         }
+        size = last_valid_end;
         
         // Scannig from last record end position, to determine that
         // rest flash memory wasn't already written (NOT 0xFF'ed)
@@ -324,7 +325,11 @@ mod test_def {
         type Error = ();
 
         fn write(&mut self, offset_words : usize, word : Word) -> Result<(), Self::Error> {
-            Ok(self.0[offset_words] = word)
+            if self.0[offset_words] == !0 {
+                Ok(self.0[offset_words] = word)
+            } else {
+                Err(())
+            }
         }
 
         fn read(&self, offset_words : usize) -> Word {
@@ -375,6 +380,46 @@ mod tests {
 
         assert_eq!(storage.len(), 0);
         assert_eq!(storage.capacity(), capacity);
+    }
+
+    #[test]
+    fn reinit_test() {
+        let storage_mem = [!0u32;0x100];
+        let mut storage = Storage::<_, Digest>::new(TestMem(storage_mem));
+        let mut crc32 = crc32_new();
+
+        let mut rec_desc = [
+            RecordDesc {
+                tag : 0,
+                ptr : None,
+            },
+            RecordDesc {
+                tag : 1,
+                ptr : None,
+            },
+        ];
+
+        let rec_payload = b"test";
+        storage.init(&mut rec_desc, &mut crc32);
+        storage.update(&mut rec_desc[1], &rec_payload[..], &mut crc32).unwrap();
+        assert!(&rec_desc[1].ptr.is_some());
+
+        let mut rec_desc = [
+            RecordDesc {
+                tag : 0,
+                ptr : None,
+            },
+            RecordDesc {
+                tag : 1,
+                ptr : None,
+            },
+        ];
+        let rec_payload = b"foo";
+        storage.init(&mut rec_desc, &mut crc32);
+        storage.update(&mut rec_desc[1], &rec_payload[..], &mut crc32).unwrap();
+        assert!(&rec_desc[1].ptr.is_some());
+        
+        assert_eq!(storage.get(&mut rec_desc[1], Some(&mut crc32)).unwrap().unwrap(), b"foo");
     }
     
     #[test]
